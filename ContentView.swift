@@ -9,6 +9,7 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import AudioToolbox
+import StoreKit
 
 
 // MARK: - Supported Formats
@@ -119,6 +120,18 @@ class CompressionHistoryStore: ObservableObject {
     }
 }
 
+extension CompressionHistoryStore {
+    var analytics: (count: Int, originalTotal: Int, compressedTotal: Int, saved: Int) {
+        let compressed = history.filter { $0.compressedPath != nil }
+        let count = compressed.count
+        let originalTotal = compressed.reduce(0) { $0 + $1.fileSize }
+        let compressedTotal = compressed.reduce(0) { $0 + ($1.compressedSize ?? 0) }
+        let saved = originalTotal - compressedTotal
+        return (count, originalTotal, compressedTotal, saved)
+    }
+}
+
+
 // MARK: - Helpers
 
 func saveImageFile(data: Data, name: String) -> String {
@@ -151,7 +164,6 @@ struct MainTabView: View {
 
 struct AboutView: View {
     var body: some View {
-        let year = Calendar.current.component(.year, from: Date())
         VStack {
             Spacer()
             VStack(spacing: 18) {
@@ -181,6 +193,9 @@ struct AboutView: View {
                         .shadow(radius: 1)
                 }
                 .padding(.top, 12)
+                
+                // Tip Jar donation area
+                TipJarView()
             }
             Spacer()
             Text("© 2025 Youssef Ahmed. All rights reserved.")
@@ -209,8 +224,227 @@ struct AboutView: View {
     }
 }
 
+// TipJarView from previous response
+struct TipJarView: View {
+    let productIDs = ["donate_small", "donate_medium", "donate_large"]
+    @State private var products: [Product] = []
+    @State private var isPurchasing: Bool = false
+    @State private var thankYouAmount: String? = nil
+    @State private var showThankYou: Bool = false
+    @Namespace private var animation
 
+    var body: some View {
+        ZStack {
+            VStack(spacing: 20) {
+                Text("☕️ Tip Jar")
+                    .font(.system(size: 26, weight: .heavy, design: .rounded))
+                    .padding(.top, 10)
+                    .foregroundStyle(LinearGradient(
+                        colors: [.pink, .purple, .blue],
+                        startPoint: .leading, endPoint: .trailing
+                    ))
 
+                Text("Support the development of Compressor by leaving a tip. Your kindness helps keep this app free for everyone! 💙")
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+
+                // Fancier horizontal buttons
+                HStack(spacing: 18) {
+                    ForEach(products, id: \.id) { product in
+                        TipButton(product: product,
+                                  isPurchasing: isPurchasing,
+                                  action: { purchase(product: product) }
+                        )
+                        .matchedGeometryEffect(id: product.id, in: animation)
+                    }
+                }
+                .padding(.vertical, 12)
+                .opacity(showThankYou ? 0.4 : 1.0)
+
+                if showThankYou, let amount = thankYouAmount {
+                    ThankYouBanner(amount: amount)
+                        .matchedGeometryEffect(id: "thankYouBanner", in: animation)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .padding(.top, 10)
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .shadow(color: .blue.opacity(0.18), radius: 8, y: 4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 30)
+                            .stroke(LinearGradient(colors: [.pink.opacity(0.5), .blue.opacity(0.35)], startPoint: .top, endPoint: .bottom), lineWidth: 1.5)
+                    )
+            )
+            .padding(.horizontal)
+        }
+        .task {
+            await fetchProducts()
+        }
+        .animation(.spring(response: 0.46, dampingFraction: 0.65), value: showThankYou)
+    }
+
+    // Fetch products from App Store
+    func fetchProducts() async {
+        do {
+            let result = try await Product.products(for: productIDs)
+            products = productIDs.compactMap { id in result.first { $0.id == id } }
+        } catch {}
+    }
+
+    func purchase(product: Product) {
+        guard !isPurchasing else { return }
+        isPurchasing = true
+        Task {
+            do {
+                let result = try await product.purchase()
+                switch result {
+                case .success(_):
+                    thankYouAmount = product.displayPrice
+                    withAnimation {
+                        showThankYou = true
+                    }
+                    // Auto-hide after 2.5s
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation {
+                            showThankYou = false
+                        }
+                        thankYouAmount = nil
+                    }
+                default:
+                    break
+                }
+            } catch { }
+            isPurchasing = false
+        }
+    }
+}
+
+struct TipButton: View {
+    let product: Product
+    let isPurchasing: Bool
+    let action: () -> Void
+
+    // For animated heart
+    @State private var animateHeart = false
+
+    var body: some View {
+        Button(action: {
+            action()
+            withAnimation(.interpolatingSpring(stiffness: 220, damping: 6)) {
+                animateHeart = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                animateHeart = false
+            }
+        }) {
+            VStack(spacing: 2) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.pink.opacity(0.72), Color.purple.opacity(0.88), Color.blue.opacity(0.62)],
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 52, height: 52)
+                        .shadow(color: .blue.opacity(0.13), radius: 6, x: 0, y: 2)
+                    Image(systemName: animateHeart ? "heart.fill" : "heart")
+                        .font(.system(size: 28))
+                        .foregroundColor(.white)
+                        .scaleEffect(animateHeart ? 1.2 : 1.0)
+                        .shadow(radius: animateHeart ? 6 : 2)
+                        .animation(.spring(), value: animateHeart)
+                }
+                .padding(.bottom, 2)
+                Text(product.displayName)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text(product.displayPrice)
+                    .font(.footnote.bold())
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 80, height: 100)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(.thinMaterial)
+                    .shadow(color: .purple.opacity(0.06), radius: 2)
+            )
+            .scaleEffect(isPurchasing ? 0.96 : 1.0)
+            .opacity(isPurchasing ? 0.65 : 1)
+        }
+        .disabled(isPurchasing)
+        .animation(.spring(response: 0.37, dampingFraction: 0.75), value: isPurchasing)
+    }
+}
+
+// Beautiful “Thank You” banner with shimmer
+struct ThankYouBanner: View {
+    let amount: String
+    @State private var shimmer: CGFloat = -1.0
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(LinearGradient(colors: [Color.pink.opacity(0.75), Color.blue.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(height: 60)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.19), lineWidth: 1)
+                )
+                .shadow(color: .blue.opacity(0.14), radius: 7, y: 2)
+            HStack(spacing: 14) {
+                Image(systemName: "hands.clap.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(.white)
+                    .shadow(radius: 3)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Thank You! 🙏")
+                        .font(.title2.bold())
+                        .foregroundColor(.white)
+                        .overlay(
+                            // Shimmer overlay
+                            GeometryReader { geo in
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.13), Color.white, Color.white.opacity(0.11)],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                                .frame(width: geo.size.width, height: geo.size.height)
+                                .mask(
+                                    Rectangle()
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [.clear, .white, .clear],
+                                                startPoint: .leading, endPoint: .trailing)
+                                        )
+                                        .offset(x: shimmer * geo.size.width)
+                                )
+                                .animation(.linear(duration: 1.2).repeatForever(autoreverses: false), value: shimmer)
+                            }
+                            .allowsHitTesting(false)
+                        )
+                    Text("Your tip (\(amount)) means a lot!")
+                        .font(.body)
+                        .foregroundColor(.white.opacity(0.98))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+        }
+        .onAppear {
+            shimmer = -1.0
+            DispatchQueue.main.async {
+                shimmer = 1.2
+            }
+        }
+    }
+}
 
 // MARK: - Compress Tab
 
@@ -446,12 +680,12 @@ struct CompressView: View {
                 }
             }
             // TRIGGER ESTIMATION WHENEVER ANY OPTION CHANGES
-            .onChange(of: compressionQuality) { _ in estimateOutputSize() }
-            .onChange(of: selectedFormat) { _ in estimateOutputSize() }
-            .onChange(of: resizeMode) { _ in estimateOutputSize() }
-            .onChange(of: resizeValue) { _ in estimateOutputSize() }
-            .onChange(of: removeMetadata) { _ in estimateOutputSize() }
-            .onChange(of: imageFiles) { _ in estimateOutputSize() }
+            .onChange(of: compressionQuality) { estimateOutputSize() }
+            .onChange(of: selectedFormat) { estimateOutputSize() }
+            .onChange(of: resizeMode) { estimateOutputSize() }
+            .onChange(of: resizeValue) { estimateOutputSize() }
+            .onChange(of: removeMetadata) { estimateOutputSize() }
+            .onChange(of: imageFiles) { estimateOutputSize() }
         }
     }
 
@@ -549,7 +783,7 @@ struct CompressView: View {
 
             // --- Prepare compression ---
             var data: Data?
-            var ext = format.fileExtension
+            let ext = format.fileExtension
             switch format {
                 case .jpeg:
                     data = image.jpegData(compressionQuality: quality)
@@ -760,7 +994,7 @@ struct ImageCardView: View {
             }
             // ...rest unchanged...
 
-            if let cpath = img.compressedPath,
+            if let _ = img.compressedPath,
                let csize = img.compressedSize,
                let cfmt = img.compressedFormat,
                let cimg = img.compressedImage {
@@ -836,6 +1070,18 @@ struct HistoryView: View {
                 .animation(.easeInOut, value: historyStore.history)
             } else {
                 List {
+                    // 🟢 Stats Card with animation
+                    HistoryStatsCard(
+                        count: historyStore.analytics.count,
+                        original: historyStore.analytics.originalTotal,
+                        compressed: historyStore.analytics.compressedTotal,
+                        saved: historyStore.analytics.saved
+                    )
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+
+                    // 🟢 History Cards
                     ForEach(historyStore.history.filter { $0.compressedPath != nil }) { img in
                         HistoryCardView(img: img,
                             onShareOriginal: { if let uiimg = img.image { share(item: uiimg) } },
@@ -870,6 +1116,7 @@ struct HistoryView: View {
         showShareSheet = true
     }
 }
+
 
 // MARK: - History Card View (Animated)
 
@@ -1011,6 +1258,87 @@ struct FormatBadge: View {
     }
 }
 
+//MARK: - History
+import SwiftUI
+
+struct HistoryStatsCard: View {
+    let count: Int
+    let original: Int
+    let compressed: Int
+    let saved: Int
+
+    @State private var show = false
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 12) {
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(.accentColor)
+                    .scaleEffect(show ? 1.1 : 1)
+                    .animation(.easeOut(duration: 0.4), value: show)
+                Text("Compression Stats")
+                    .font(.headline)
+                    .opacity(show ? 1 : 0)
+                    .animation(.easeIn(duration: 0.3), value: show)
+                Spacer()
+            }
+            .padding(.bottom, 4)
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Files")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(count)")
+                        .font(.title2.bold())
+                        .transition(.opacity.combined(with: .slide))
+                }
+                Spacer()
+                VStack(alignment: .leading) {
+                    Text("Original")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(formatBytes(original))
+                        .font(.title3)
+                        .transition(.opacity.combined(with: .slide))
+                }
+                Spacer()
+                VStack(alignment: .leading) {
+                    Text("Compressed")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(formatBytes(compressed))
+                        .font(.title3)
+                        .transition(.opacity.combined(with: .slide))
+                }
+                Spacer()
+                VStack(alignment: .leading) {
+                    Text("Saved")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                    Text("-" + formatBytes(saved))
+                        .font(.title3.bold())
+                        .foregroundColor(.green)
+                        .transition(.opacity.combined(with: .slide))
+                }
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(20)
+        .shadow(radius: 3)
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .onAppear {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                show = true
+            }
+        }
+        .onDisappear {
+            show = false
+        }
+    }
+}
 
 
 
